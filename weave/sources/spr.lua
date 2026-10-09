@@ -5,6 +5,10 @@
 
 local shell = require("weave.util.shell")
 
+local verify = require("weave.util.verify")
+
+local TRUSTED_SIGNERS = "/etc/silk/trusted-signers"
+
 local SPR_CACHE_PATH = "/silk/weave/cache/spr"
 
 local TIER_REPOS = {
@@ -25,11 +29,14 @@ local function sync_monorepo(tier)
     return
   end
 
-  local cache_dir = SPR_CACHE_PATH .. "/" .. tier
-  if path_exists(cache_dir) then
-    shell.run("cd " .. cache_dir .. " && git pull --quiet")
-  else
-    shell.run("git clone --quiet " .. TIER_REPOS[tier] .. " " .. cache_dir)
+  local status, info = verify.sync_signed_repo({
+    url = TIER_REPOS[tier],
+    dir = SPR_CACHE_PATH .. "/" .. tier,
+    trusted_signers = TRUSTED_SIGNERS,
+  })
+
+  if status ~= "ok" then
+    io.stderr:write(("spr: %s tier unavailable (%s), skipping\n"):format(tier, tostring(info)))
   end
 
   synced_this_run[tier] = true
@@ -72,7 +79,7 @@ local function resolve_from_open(name)
   else
     local ok = shell.run("git clone --quiet " .. repo_url .. " " .. cache_dir)
     if not ok then
-      return nil       -- no such repo -- not found here, not a hard error
+      return nil -- no such repo -- not found here, not a hard error
     end
   end
 
@@ -88,6 +95,39 @@ local function resolve_from_open(name)
 end
 
 local M = {}
+
+local LOCAL_RECIPES_PATH = "/usr/lib/weave/recipes" -- same location native.lua's require() resolves against
+
+function M.search(query)
+  local results = {}
+
+  -- local recipes first, per the same "local always wins" precedent as resolve()
+  local handle = io.popen("ls " .. LOCAL_RECIPES_PATH .. " 2>/dev/null")
+  for filename in handle:lines() do
+    local name = filename:match("^(.+)%.lua$")
+    if name and name ~= "recipe" and name:find(query, 1, true) then
+      results[#results + 1] = { name = name, tier = "local" }
+    end
+  end
+  handle:close()
+
+  for _, tier in ipairs(TIER_ORDER) do
+    sync_monorepo(tier)
+
+    local recipes_dir = SPR_CACHE_PATH .. "/" .. tier .. "/recipes"
+    local tier_handle = io.popen("ls " .. recipes_dir .. " 2>/dev/null")
+
+    for filename in tier_handle:lines() do
+      local name = filename:match("^(.+)%.lua$")
+      if name and name:find(query, 1, true) then
+        results[#results + 1] = { name = name, tier = tier }
+      end
+    end
+    tier_handle:close()
+  end
+
+  return results
+end
 
 function M.resolve(name)
   for _, tier in ipairs(TIER_ORDER) do
