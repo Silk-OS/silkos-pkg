@@ -14,4 +14,4 @@ end
 
 local M = {}
 M.run = run
-return MM
+return M

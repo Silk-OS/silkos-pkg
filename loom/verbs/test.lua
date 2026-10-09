@@ -39,5 +39,4 @@ function M.run(args)
   print("loom test: all packages built successfully")
 end
 
-return Mreturn
-M
+return M
