@@ -5,7 +5,7 @@ local executor = require("weave.executor")
 local staging = require("loom.state.staging")
 local generations = require("loom.state.generations")
 local reboot_checklist = require("loom.state.reboot_checklist")
-local hash = require("loom.util.hash")
+local hash = require("weave.util.hash")
 
 local CURRENT_LINK = "/silk/ostree/deployments/current"
 
@@ -23,15 +23,22 @@ local M = {}
 function M.run(args)
   local config = manifest.load()
 
-  local recipes, err = resolver.resolve_all(config.packages)
-  if not recipes then
-    print("loom bind: resolution failed: " .. tostring(err))
+  local ok, result = pcall(resolver.resolve_all, config.packages)
+  if not ok then
+    print("loom bind: resolution failed: " .. tostring(result))
     os.exit(1)
+  end
+
+  local recipes_list = {}
+  for _, name in ipairs(result.order) do
+    recipes_list[#recipes_list + 1] = result.recipes[name]
   end
 
   local staged_entries = {}
 
-  for _, recipe in ipairs(recipes) do
+  for _, name in ipairs(result.order) do
+    local recipe = result.recipes[name]
+
     local input_hash, cached_destdir = staging.check_cache(recipe)
 
     if cached_destdir then
@@ -41,25 +48,25 @@ function M.run(args)
       }
     else
       print(("loom bind: %s %s — building..."):format(recipe.name, recipe.version))
-      local ok, result = pcall(executor.run, recipe, { yes = args.yes })
-      if not ok then
-        print(("loom bind: %s FAILED: %s"):format(recipe.name, tostring(result)))
+      local ok2, result2 = pcall(executor.run, recipe, { yes = args.yes })
+      if not ok2 then
+        print(("loom bind: %s FAILED: %s"):format(recipe.name, tostring(result2)))
         os.exit(1)
       end
       staged_entries[#staged_entries + 1] = {
-        recipe = recipe, input_hash = input_hash, destdir = result.destdir, cached = false,
+        recipe = recipe, input_hash = input_hash, destdir = result2.destdir, cached = false,
       }
     end
   end
 
   print("loom bind: staging generation...")
-  local ok, stage_result = pcall(staging.stage, staged_entries)
-  if not ok then
+  local ok3, stage_result = pcall(staging.stage, staged_entries)
+  if not ok3 then
     print("loom bind: staging failed: " .. tostring(stage_result))
     os.exit(1)
   end
 
-  local requires_reboot, reason = reboot_checklist.check(recipes, config.system.init)
+  local requires_reboot, reason = reboot_checklist.check(recipes_list, config.system.init)
 
   local next_gen_num = generations.next_number()
 

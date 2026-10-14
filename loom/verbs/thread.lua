@@ -4,22 +4,24 @@ local resolver = require("weave.resolver")
 local executor = require("weave.executor")
 local staging = require("loom.state.staging")
 local generations = require("loom.state.generations")
-local hash = require("loom.util.hash")
+local hash = require("weave.util.hash")
 
 local M = {}
 
 function M.run(args)
   local config = manifest.load()
 
-  local recipes, err = resolver.resolve_all(config.packages)
-  if not recipes then
-    print("loom thread: resolution failed: " .. tostring(err))
+  local ok, result = pcall(resolver.resolve_all, config.packages)
+  if not ok then
+    print("loom thread: resolution failed: " .. tostring(result))
     os.exit(1)
   end
 
   local staged_entries = {}
 
-  for _, recipe in ipairs(recipes) do
+  for _, name in ipairs(result.order) do
+    local recipe = result.recipes[name]
+
     local input_hash, cached_destdir = staging.check_cache(recipe)
 
     if cached_destdir then
@@ -32,25 +34,25 @@ function M.run(args)
       }
     else
       print(("loom thread: %s %s — building..."):format(recipe.name, recipe.version))
-      local ok, result = pcall(executor.run, recipe, { yes = args.yes })
+      local ok2, result2 = pcall(executor.run, recipe, { yes = args.yes })
 
-      if not ok then
-        print(("loom thread: %s FAILED: %s"):format(recipe.name, tostring(result)))
+      if not ok2 then
+        print(("loom thread: %s FAILED: %s"):format(recipe.name, tostring(result2)))
         os.exit(1)
       end
 
       staged_entries[#staged_entries + 1] = {
         recipe = recipe,
         input_hash = input_hash,
-        destdir = result.destdir,
+        destdir = result2.destdir,
         cached = false,
       }
     end
   end
 
   print("loom thread: staging generation...")
-  local ok, stage_result = pcall(staging.stage, staged_entries)
-  if not ok then
+  local ok3, stage_result = pcall(staging.stage, staged_entries)
+  if not ok3 then
     print("loom thread: staging failed: " .. tostring(stage_result))
     os.exit(1)
   end
@@ -61,7 +63,7 @@ function M.run(args)
     generation = next_gen_num,
     ostree_commit = stage_result.ostree_commit,
     fabric_hash = hash.hash_file("/etc/silk/fabric.lua"),
-    init = config.system.init, -- checks systems init
+    init = config.system.init,
     created = os.time(),
     status = "stale",
   })

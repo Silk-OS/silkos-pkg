@@ -1,6 +1,6 @@
 -- loom/state/staging.lua
 local shell = require("weave.util.shell")
-local hash = require("loom.util.hash")
+local hash = require("weave.util.hash")
 
 local M = {}
 
@@ -9,21 +9,7 @@ local AUR_CACHE_PATH = "/silk/weave/cache/aur"
 local MERGE_PATH = "/silk/ostree/staged"
 local OSTREE_REPO = "/silk/ostree/repo"
 local OSTREE_BRANCH = "silk"
-
-local function compute_input_hash(recipe)
-  local parts = {
-    recipe.name,
-    recipe.version,
-    recipe.source.kind,
-    recipe.source.checksum or "",
-    table.concat(recipe.depends or {}, ","),
-    recipe.flavor or "",
-  }
-  for _, step in ipairs(recipe.acquire.steps or {}) do
-    parts[#parts + 1] = step.cmd or "fn-step"
-  end
-  return hash.sha256(table.concat(parts, "|"))
-end
+local DEPLOYMENTS_PATH = "/silk/ostree/deployments"
 
 local function compute_output_hash(destdir)
   local cmd = "tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner -cf - -C "
@@ -47,7 +33,7 @@ local function path_exists(path)
 end
 
 function M.check_cache(recipe)
-  local input_hash = compute_input_hash(recipe)
+  local input_hash = recipe.input_hash
   local entry_dir = cache_dir_for(recipe) .. "/" .. input_hash .. "-" .. recipe.name .. "-" .. recipe.version
 
   if path_exists(entry_dir) then
@@ -62,7 +48,7 @@ local function place_in_cache(entry)
   end
 
   local target_dir = cache_dir_for(entry.recipe) ..
-      "/" .. entry.input_hash .. "-" .. entry.recipe.name .. "-" .. entry.recipe.version
+  "/" .. entry.input_hash .. "-" .. entry.recipe.name .. "-" .. entry.recipe.version
 
   shell.run("mkdir -p " .. hash.shell_quote(target_dir))
   shell.run("cp -a " .. hash.shell_quote(entry.destdir) .. "/. " .. hash.shell_quote(target_dir) .. "/")
@@ -156,6 +142,17 @@ function M.stage(entries)
   end
 
   return { ostree_commit = commit_hash }
+end
+
+function M.checkout(commit_hash, generation_number)
+  local deployment_dir = DEPLOYMENTS_PATH .. "/" .. generation_number
+  local cmd = ("ostree --repo=%s checkout %s %s"):format(
+    hash.shell_quote(OSTREE_REPO), commit_hash, hash.shell_quote(deployment_dir))
+  local ok = os.execute(cmd)
+  if not ok then
+    error("staging: ostree checkout failed for generation " .. generation_number)
+  end
+  return deployment_dir
 end
 
 return M

@@ -4,7 +4,7 @@ local resolver = require("weave.resolver")
 local executor = require("weave.executor")
 local staging = require("loom.state.staging")
 local reboot_checklist = require("loom.state.reboot_checklist")
-local hash = require("loom.util.hash")
+local hash = require("weave.util.hash")
 
 local CURRENT_LINK = "/silk/ostree/deployments/current"
 
@@ -22,13 +22,18 @@ local M = {}
 function M.run(args)
   local config = manifest.load()
 
-  local recipes, err = resolver.resolve_all(config.packages)
-  if not recipes then
-    print("loom spin: resolution failed: " .. tostring(err))
+  local ok, result = pcall(resolver.resolve_all, config.packages)
+  if not ok then
+    print("loom spin: resolution failed: " .. tostring(result))
     os.exit(1)
   end
 
-  local requires_reboot, reason = reboot_checklist.check(recipes, config.system.init)
+  local recipes_list = {}
+  for _, name in ipairs(result.order) do
+    recipes_list[#recipes_list + 1] = result.recipes[name]
+  end
+
+  local requires_reboot, reason = reboot_checklist.check(recipes_list, config.system.init)
   if requires_reboot then
     print("loom spin: cannot live-preview this generation — " .. reason)
     print("loom spin: use 'loom thread' or 'loom bind' instead, then reboot.")
@@ -37,7 +42,9 @@ function M.run(args)
 
   local staged_entries = {}
 
-  for _, recipe in ipairs(recipes) do
+  for _, name in ipairs(result.order) do
+    local recipe = result.recipes[name]
+
     local input_hash, cached_destdir = staging.check_cache(recipe)
 
     if cached_destdir then
@@ -47,20 +54,20 @@ function M.run(args)
       }
     else
       print(("loom spin: %s %s — building..."):format(recipe.name, recipe.version))
-      local ok, result = pcall(executor.run, recipe, { yes = args.yes })
-      if not ok then
-        print(("loom spin: %s FAILED: %s"):format(recipe.name, tostring(result)))
+      local ok2, result2 = pcall(executor.run, recipe, { yes = args.yes })
+      if not ok2 then
+        print(("loom spin: %s FAILED: %s"):format(recipe.name, tostring(result2)))
         os.exit(1)
       end
       staged_entries[#staged_entries + 1] = {
-        recipe = recipe, input_hash = input_hash, destdir = result.destdir, cached = false,
+        recipe = recipe, input_hash = input_hash, destdir = result2.destdir, cached = false,
       }
     end
   end
 
   print("loom spin: staging preview...")
-  local ok, stage_result = pcall(staging.stage, staged_entries)
-  if not ok then
+  local ok3, stage_result = pcall(staging.stage, staged_entries)
+  if not ok3 then
     print("loom spin: staging failed: " .. tostring(stage_result))
     os.exit(1)
   end

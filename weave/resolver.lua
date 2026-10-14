@@ -3,16 +3,16 @@
 local parser = require("weave.parser")
 local schema = require("weave.schema")
 local version = require("weave.util.version")
+local hash = require("weave.util.hash")
 
 -- Maps a source kind to its module path. NOT required eagerly -- each
 -- one is only require()'d the first time it's actually needed, so a
 -- resolve involving only native packages works fine even if
--- sources/aur.lua, nix.lua, or deb.lua don't exist yet.
+-- sources/aur.lua or nix.lua don't exist yet.
 local SOURCE_MODULES = {
   native = "weave.sources.native",
   aur    = "weave.sources.aur",
   nix    = "weave.sources.nix",
-  deb    = "weave.sources.deb",
 }
 
 local loaded_sources = {} -- cache, so each module is require()'d at most once
@@ -54,6 +54,31 @@ local function resolve_package_string(pkg_string)
   return recipe
 end
 
+-- Computes a recipe's content-addressed input-hash, folding in the RESOLVED hash of each dependency (not just its declared name) so
+-- that a change to a dependency -- e.g. a kernel version bump correctly propagates to anything depending on it, the same way
+-- Nix's content-addressing does it. `resolved` must already contain a fully-hashed entry for every dependency by this point, which the
+-- post-order walk in resolve_all() guarantees.
+local function compute_input_hash(recipe, resolved)
+  local parts = {
+    recipe.name,
+    recipe.version,
+    recipe.source.kind,
+    recipe.source.checksum or "",
+    recipe.flavor or "",
+  }
+
+  for _, step in ipairs(recipe.acquire.steps or {}) do
+    parts[#parts + 1] = step.cmd or "fn-step"
+  end
+
+  for _, dep in ipairs(recipe.depends or {}) do
+    local dep_name = type(dep) == "table" and dep.name or dep
+    parts[#parts + 1] = resolved[dep_name].input_hash
+  end
+
+  return hash.sha256(table.concat(parts, "|"))
+end
+
 local function resolve_all(package_strings)
   local resolved = {}
   local order = {}
@@ -88,6 +113,8 @@ local function resolve_all(package_strings)
         end
       end
     end
+
+    recipe.input_hash = compute_input_hash(recipe, resolved)
 
     visiting[name] = nil
     table.insert(order, name)

@@ -8,20 +8,22 @@ local M = {}
 function M.run(args)
   local config = manifest.load()
 
-  local recipes, err = resolver.resolve_all(config.packages)
-  if not recipes then
-    print("loom test: resolution failed: " .. tostring(err))
+  local ok, result = pcall(resolver.resolve_all, config.packages)
+  if not ok then
+    print("loom test: resolution failed: " .. tostring(result))
     os.exit(1)
   end
 
   local failures = {}
 
-  for _, recipe in ipairs(recipes) do
+  for _, name in ipairs(result.order) do
+    local recipe = result.recipes[name]
+
     print(("loom test: building %s %s..."):format(recipe.name, recipe.version or "?"))
 
-    local ok, build_err = pcall(executor.run, recipe, { yes = true })
+    local ok2, build_err = pcall(executor.run, recipe, { yes = true })
 
-    if ok then
+    if ok2 then
       print(("loom test: %s OK"):format(recipe.name))
     else
       print(("loom test: %s FAILED: %s"):format(recipe.name, tostring(build_err)))
