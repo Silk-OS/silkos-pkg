@@ -27,7 +27,10 @@ local function list_tags(dir)
   return tags
 end
 
--- Returns "ok", {tag=, commit=, changed=}  or  "unavailable", reason.
+-- Returns "ok", {tag=, commit=, changed=, skipped=}  or  "unavailable", reason.
+-- skipped lists the newer tags that were rejected, newest first, as
+-- { tag = "v4", reason = "..." } entries, so callers can tell the user that
+-- newer releases exist but could not be verified.
 -- Raises an error on anything that looks like tampering.
 function M.sync_signed_repo(opts)
   local dir, url, signers = opts.dir, opts.url, opts.trusted_signers
@@ -56,6 +59,7 @@ function M.sync_signed_repo(opts)
   end
 
   local has_held, held = git(dir, "rev-parse -q --verify " .. q("HEAD^{commit}"))
+  local skipped = {}
 
   for _, name in ipairs(tags) do
     local _, tag_id = git(dir, "rev-parse -q --verify " .. q("refs/tags/" .. name))
@@ -73,7 +77,7 @@ function M.sync_signed_repo(opts)
       end
 
       if has_held and held == commit then
-        return "ok", { tag = name, commit = commit, changed = false }
+        return "ok", { tag = name, commit = commit, changed = false, skipped = skipped }
       end
 
       local descends = (not has_held)
@@ -82,13 +86,18 @@ function M.sync_signed_repo(opts)
       if descends then
         local ok, out = git(dir, "checkout -q --detach " .. q(commit))
         if not ok then error("verify: checkout failed: " .. out) end
-        return "ok", { tag = name, commit = commit, changed = true }
+        return "ok", { tag = name, commit = commit, changed = true, skipped = skipped }
       end
 
+      skipped[#skipped + 1] = {
+        tag = name,
+        reason = "validly signed but does not descend from the commit already held",
+      }
       io.stderr:write("verify: REFUSING tag '" .. name .. "': validly signed but does not descend from "
         .. "the commit already held (possible rollback or rewritten history). Keeping the current "
         .. "checkout. If this rewrite is legitimate, delete " .. dir .. " and re-sync.\n")
     else
+      skipped[#skipped + 1] = { tag = name, reason = "no valid signature from a trusted key" }
       io.stderr:write("verify: skipping tag '" .. name .. "' (no valid signature from a trusted key)\n")
     end
   end
