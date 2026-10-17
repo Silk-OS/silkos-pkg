@@ -19,6 +19,7 @@ local TIER_REPOS = {
 local TIER_ORDER = { "official", "community" }
 
 local synced_this_run = {} -- avoids re-pulling the same tier repo for every package in one run
+local sync_info = {}       -- last verified-sync result per tier
 
 local function path_exists(path)
   return os.execute("test -e '" .. path:gsub("'", "'\\''") .. "'") == true
@@ -37,6 +38,11 @@ local function sync_monorepo(tier)
 
   if status ~= "ok" then
     io.stderr:write(("spr: %s tier unavailable (%s), skipping\n"):format(tier, tostring(info)))
+  else
+    sync_info[tier] = info
+    for _, s in ipairs(info.skipped or {}) do
+      io.stderr:write(("spr: %s tier: newer tag '%s' ignored (%s)\n"):format(tier, s.tag, s.reason))
+    end
   end
 
   synced_this_run[tier] = true
@@ -97,6 +103,10 @@ end
 local M = {}
 
 local LOCAL_RECIPES_PATH = "/usr/lib/weave/recipes" -- same location native.lua's require() resolves against
+
+function M.sync_info(tier)
+  return sync_info[tier]
+end
 
 function M.search(query)
   local results = {}
